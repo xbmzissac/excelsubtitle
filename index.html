@@ -3,9 +3,74 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>智能字幕分段工具</title>
+    <title>智能字幕分段工具 - DeepSeek 集成版</title>
     <style>
-        /* 原有样式保留，新增加载动画 */
+        * {
+            font-family: '微软雅黑', sans-serif;
+            box-sizing: border-box;
+        }
+
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background-color: #f0f2f5;
+        }
+
+        .container {
+            background-color: white;
+            padding: 2rem;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px 0 rgba(0, 0, 0, 0.05);
+            width: 100%;
+            max-width: 800px;
+        }
+
+        .progress-container {
+            width: 100%;
+            height: 4px;
+            background-color: #eee;
+            border-radius: 2px;
+            margin: 1rem 0;
+            position: relative;
+        }
+
+        .progress-bar {
+            height: 100%;
+            background-color: #4a90e2;
+            border-radius: 2px;
+            transition: width 0.3s ease;
+        }
+
+        .button {
+            display: block;
+            width: 100%;
+            padding: 0.8rem;
+            background-color: #4a90e2;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            cursor: pointer;
+            margin-top: 1.5rem;
+            transition: opacity 0.2s;
+        }
+
+        .button:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+        }
+
+        .result-link {
+            color: #4a90e2;
+            text-decoration: underline;
+            cursor: pointer;
+            display: block;
+            margin-top: 1rem;
+        }
+
         .loader {
             display: none;
             border: 3px solid #f3f3f3;
@@ -21,131 +86,297 @@
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
+
+        .error-message {
+            color: #ff4444;
+            margin-top: 1rem;
+            display: none;
+        }
     </style>
+    <script src="https://cdn.sheetjs.com/xlsx-0.18.5/package/dist/xlsx.full.min.js"></script>
 </head>
 <body>
-    <!-- 容器结构保持不变 -->
-    <script>
-        // 配置参数
-        const API_CONFIG = {
-            endpoint: 'https://api.deepseek.com/v1/chat/completions',
-            model: 'deepseek-chat',
-            temperature: 0.2,
-            max_tokens: 4096
-        };
+    <div class="container">
+        <h1 style="text-align: center; margin-bottom: 2rem;">智能字幕分段工具</h1>
+        
+        <input type="file" id="fileInput" accept=".xlsx" style="display: none;">
+        <label for="fileInput" class="button">选择字幕 Excel 文件</label>
+        
+        <div class="progress-container">
+            <div class="progress-bar" id="progressBar"></div>
+        </div>
+        
+        <button id="processButton" class="button" disabled>开始智能分段处理</button>
+        <div class="loader" id="loader"></div>
+        
+        <div id="result" style="display: none;">
+            <p>处理完成！点击下载结果：</p>
+            <a id="downloadLink" class="result-link" download="分段后字幕.xlsx">下载分段文件</a>
+        </div>
+        <div id="errorMessage" class="error-message"></div>
+    </div>
 
-        // 处理逻辑重构
-        async function processWithDeepSeek(textBlocks) {
-            const batches = chunkArray(textBlocks, 5); // 分批次处理
-            let allSegments = [];
-            
-            for (const [index, batch] of batches.entries()) {
-                updateProgress((index + 1) / batches.length);
-                try {
-                    const response = await sendBatchRequest(batch);
-                    allSegments = allSegments.concat(parseSegments(response));
-                } catch (error) {
-                    console.error(`Batch ${index} failed:`, error);
-                    allSegments = allSegments.concat(fallbackSegmentation(batch));
-                }
-            }
-            return allSegments;
-        }
+<script>
+// 配置参数
+const CONFIG = {
+    apiUrl: 'https://api.deepseek.com/v1/chat/completions',
+    apiKey: 'sk-3c45ea45fb0648aeac327250131ebd51', // 需替换为实际API密钥
+    batchSize: 5, // 每批处理条目数
+    maxRetries: 2 // 最大重试次数
+};
 
-        async function sendBatchRequest(batch) {
-            const response = await fetch(API_CONFIG.endpoint, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
-                },
-                body: JSON.stringify({
-                    model: API_CONFIG.model,
-                    messages: [{
-                        role: "user",
-                        content: `请将以下字幕文本按语义分段，返回JSON格式（segments数组，包含text和最佳分句位置）：
-示例响应：
-{
-  "segments": [
-    {"text": "完整的第一句话", "split_position": 15},
-    {"text": "接下来的第二句话", "split_position": 32}
-  ]
+// DOM元素
+const dom = {
+    fileInput: document.getElementById('fileInput'),
+    processButton: document.getElementById('processButton'),
+    progressBar: document.getElementById('progressBar'),
+    result: document.getElementById('result'),
+    downloadLink: document.getElementById('downloadLink'),
+    error: document.getElementById('errorMessage'),
+    loader: document.getElementById('loader')
+};
+
+// 状态管理
+let processing = false;
+let originalData = [];
+
+// 事件监听
+dom.fileInput.addEventListener('change', handleFileSelect);
+dom.processButton.addEventListener('click', startProcessing);
+
+async function handleFileSelect(e) {
+    try {
+        resetUI();
+        const file = e.target.files[0];
+        if (!file) return;
+
+        dom.processButton.disabled = false;
+        originalData = await parseExcel(file);
+    } catch (error) {
+        showError(`文件读取失败: ${error.message}`);
+    }
 }
 
-需要分段的文本：
-${batch.map(t => t.fullText).join('\n')}`
-                    }],
-                    temperature: API_CONFIG.temperature,
-                    max_tokens: API_CONFIG.max_tokens
-                })
-            });
+async function startProcessing() {
+    if (processing) return;
+    processing = true;
+    
+    try {
+        resetUI();
+        showLoader();
+        dom.processButton.disabled = true;
 
-            if (!response.ok) throw new Error(`API请求失败: ${response.status}`);
-            return response.json();
-        }
-
-        function parseSegments(response) {
-            try {
-                const raw = JSON.parse(response.choices[0].message.content);
-                return raw.segments.map(s => ({
-                    text: s.text,
-                    splitAt: s.split_position
-                }));
-            } catch (e) {
-                throw new Error('API响应解析失败');
+        // 准备处理数据
+        const textBlocks = prepareTextBlocks(originalData);
+        const batches = chunkArray(textBlocks, CONFIG.batchSize);
+        
+        // 分批处理
+        let allSegments = [];
+        for (const [batchIndex, batch] of batches.entries()) {
+            updateProgress((batchIndex + 1) / batches.length);
+            
+            let retryCount = 0;
+            while (retryCount <= CONFIG.maxRetries) {
+                try {
+                    const response = await processBatch(batch);
+                    const segments = parseApiResponse(response);
+                    allSegments = allSegments.concat(segments);
+                    break;
+                } catch (error) {
+                    if (retryCount === CONFIG.maxRetries) {
+                        allSegments = allSegments.concat(fallbackProcess(batch));
+                        break;
+                    }
+                    retryCount++;
+                }
             }
         }
 
-        // 时间码合并算法
-        function mergeTimecodes(segments, originalBlocks) {
-            let currentBlockIndex = 0;
-            return segments.map(segment => {
-                const timecodes = [];
-                let accumulatedLength = 0;
-                
-                while (currentBlockIndex < originalBlocks.length) {
-                    const block = originalBlocks[currentBlockIndex];
-                    const remaining = segment.text.length - accumulatedLength;
-                    
-                    if (remaining <= 0) break;
-                    
-                    const takeLength = Math.min(remaining, block.text.length);
-                    timecodes.push(block.timecode);
-                    
-                    accumulatedLength += takeLength;
-                    if (takeLength === block.text.length) {
-                        currentBlockIndex++;
-                    } else {
-                        // 处理部分匹配的情况
-                        originalBlocks[currentBlockIndex].text = block.text.slice(takeLength);
-                        originalBlocks[currentBlockIndex].timecode = adjustTimecode(
-                            block.timecode, 
-                            takeLength
-                        );
-                    }
-                }
-                
-                return {
-                    text: segment.text,
-                    timecodes,
-                    translation: findBestTranslation(segment.text, originalBlocks)
-                };
+        // 合并时间码
+        const mergedData = mergeTimecodes(allSegments, originalData);
+        
+        // 生成文件
+        generateExcel(mergedData);
+        showResult();
+    } catch (error) {
+        showError(`处理失败: ${error.message}`);
+    } finally {
+        processing = false;
+        hideLoader();
+        dom.processButton.disabled = false;
+    }
+}
+
+// 核心处理函数
+async function processBatch(batch) {
+    const response = await fetch(CONFIG.apiUrl, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${CONFIG.apiKey}`
+        },
+        body: JSON.stringify({
+            model: "deepseek-chat",
+            messages: [{
+                role: "user",
+                content: `请按以下要求处理字幕文本：
+1. 按语义分段的完整段落
+2. 识别技术术语用<term>标记
+3. 返回JSON格式：
+{
+    "segments": [
+        {
+            "text": "完整段落",
+            "split_pos": 25,
+            "terms": ["CPU", "GPU"]
+        }
+    ]
+}
+
+待处理文本：
+${batch.map(b => b.text).join('\n')}`
+            }]
+        })
+    });
+
+    if (!response.ok) throw new Error(`API请求失败: ${response.status}`);
+    return response.json();
+}
+
+// 数据预处理
+function prepareTextBlocks(data) {
+    return data.map(item => ({
+        text: item.txt,
+        timecode: item.time,
+        translation: item.trans,
+        episode: item.episode
+    }));
+}
+
+// 时间码合并算法
+function mergeTimecodes(segments, original) {
+    let pointer = 0;
+    return segments.map(segment => {
+        const timecodes = [];
+        let textLength = 0;
+
+        while (pointer < original.length && textLength < segment.text.length) {
+            const current = original[pointer];
+            const remaining = segment.text.length - textLength;
+            const takeLength = Math.min(remaining, current.txt.length);
+
+            timecodes.push({
+                start: current.time.split('-')[0],
+                end: calculatePartialTime(current.time, takeLength / current.txt.length)
             });
+
+            if (takeLength === current.txt.length) {
+                pointer++;
+            } else {
+                original[pointer].txt = current.txt.slice(takeLength);
+                original[pointer].time = `${calculatePartialTime(current.time, takeLength / current.txt.length)}-${current.time.split('-')[1]}`;
+            }
+            textLength += takeLength;
         }
 
-        // 辅助函数
-        function chunkArray(arr, size) {
-            return Array.from({length: Math.ceil(arr.length/size)}, (_,i) => 
-                arr.slice(i*size, i*size+size));
-        }
+        return {
+            episode: original[pointer]?.episode || '',
+            text: segment.text,
+            timecodes: mergeContinuousTimecodes(timecodes),
+            translation: findBestTranslation(segment.text, original),
+            terms: segment.terms
+        };
+    });
+}
 
-        function fallbackSegmentation(batch) {
-            // 基于标点的备用分段逻辑
-            return batch.map(block => ({
-                text: block.fullText,
-                splitAt: block.fullText.length
+// 辅助函数
+function calculatePartialTime(timecode, ratio) {
+    const [start, end] = timecode.split('-');
+    const duration = timeToSeconds(end) - timeToSeconds(start);
+    return secondsToTime(timeToSeconds(start) + duration * ratio);
+}
+
+function timeToSeconds(time) {
+    const parts = time.split(':');
+    return (+parts[0] * 3600) + (+parts[1] * 60) + (+parts[2]);
+}
+
+function secondsToTime(secs) {
+    const hours = Math.floor(secs / 3600);
+    const minutes = Math.floor((secs % 3600) / 60);
+    const seconds = Math.floor(secs % 60);
+    return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+}
+
+function pad(n) { return n < 10 ? '0' + n : n; }
+
+// UI相关函数
+function updateProgress(percentage) {
+    dom.progressBar.style.width = `${Math.floor(percentage * 100)}%`;
+}
+
+function showLoader() {
+    dom.loader.style.display = 'block';
+}
+
+function hideLoader() {
+    dom.loader.style.display = 'none';
+}
+
+function showError(msg) {
+    dom.error.textContent = msg;
+    dom.error.style.display = 'block';
+}
+
+function showResult() {
+    dom.result.style.display = 'block';
+}
+
+function resetUI() {
+    dom.error.style.display = 'none';
+    dom.result.style.display = 'none';
+    dom.progressBar.style.width = '0%';
+}
+
+// Excel处理
+async function parseExcel(file) {
+    const reader = new FileReader();
+    return new Promise((resolve, reject) => {
+        reader.onload = (e) => {
+            const data = new Uint8Array(e.target.result);
+            const workbook = XLSX.read(data, { type: 'array' });
+            const sheet = workbook.Sheets[workbook.SheetNames[0]];
+            const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+            
+            const headers = jsonData[0].map(h => h.toLowerCase());
+            resolve(jsonData.slice(1).map(row => {
+                const obj = {};
+                headers.forEach((header, index) => {
+                    obj[header] = row[index] || '';
+                });
+                return obj;
             }));
-        }
-    </script>
+        };
+        reader.onerror = reject;
+        reader.readAsArrayBuffer(file);
+    });
+}
+
+function generateExcel(data) {
+    const workbook = XLSX.utils.book_new();
+    const worksheet = XLSX.utils.json_to_sheet(data.map(item => ({
+        "剧集": item.episode,
+        "合并文本": item.text,
+        "时间码": item.timecodes.map(t => `${t.start}-${t.end}`).join('|'),
+        "翻译": item.translation,
+        "术语": item.terms?.join(', ') || ''
+    })));
+    
+    XLSX.utils.book_append_sheet(workbook, worksheet, "分段字幕");
+    const excelData = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+    const blob = new Blob([excelData], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    dom.downloadLink.href = URL.createObjectURL(blob);
+}
+</script>
 </body>
 </html>
