@@ -1,381 +1,184 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>智能字幕分段工具 - DeepSeek 集成版</title>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>智能字幕分段工具</title>
+    <script src="https://cdn.sheetjs.com/xlsx-0.18.5/package/dist/xlsx.full.min.js"></script>
     <style>
-        * {
-            font-family: '微软雅黑', sans-serif;
-            box-sizing: border-box;
-        }
-
         body {
+            font-family: '微软雅黑', sans-serif;
+            background-color: #f0f2f5;
+            margin: 0;
+            padding: 0;
             display: flex;
             justify-content: center;
             align-items: center;
-            min-height: 100vh;
-            margin: 0;
-            background-color: #f0f2f5;
+            height: 100vh;
         }
-
         .container {
-            background-color: white;
+            background: #fff;
             padding: 2rem;
             border-radius: 12px;
-            box-shadow: 0 4px 12px 0 rgba(0, 0, 0, 0.05);
-            width: 100%;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            width: 90%;
             max-width: 800px;
         }
-
-        .progress-container {
-            width: 100%;
-            height: 4px;
-            background-color: #eee;
-            border-radius: 2px;
-            margin: 1rem 0;
-            position: relative;
-        }
-
-        .progress-bar {
-            height: 100%;
-            background-color: #4a90e2;
-            border-radius: 2px;
-            transition: width 0.3s ease;
-        }
-
         .button {
-            display: block;
-            width: 100%;
-            padding: 0.8rem;
             background-color: #4a90e2;
             color: white;
+            padding: 0.8rem;
             border: none;
             border-radius: 8px;
             font-size: 1rem;
+            width: 100%;
             cursor: pointer;
-            margin-top: 1.5rem;
-            transition: opacity 0.2s;
+            margin-top: 1rem;
         }
-
         .button:disabled {
-            opacity: 0.7;
+            opacity: 0.5;
             cursor: not-allowed;
         }
-
+        .loader {
+            display: none;
+            margin: 1rem auto;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #4a90e2;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
         .result-link {
+            display: block;
+            margin-top: 1rem;
             color: #4a90e2;
             text-decoration: underline;
             cursor: pointer;
-            display: block;
+        }
+        .error {
+            color: red;
             margin-top: 1rem;
-        }
-
-        .loader {
-            display: none;
-            border: 3px solid #f3f3f3;
-            border-top: 3px solid #4a90e2;
-            border-radius: 50%;
-            width: 20px;
-            height: 20px;
-            animation: spin 1s linear infinite;
-            margin: 0 auto;
-        }
-
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-
-        .error-message {
-            color: #ff4444;
-            margin-top: 1rem;
-            display: none;
         }
     </style>
-    <script src="https://cdn.sheetjs.com/xlsx-0.18.5/package/dist/xlsx.full.min.js"></script>
 </head>
 <body>
-    <div class="container">
-        <h1 style="text-align: center; margin-bottom: 2rem;">智能字幕分段工具</h1>
-        
-        <input type="file" id="fileInput" accept=".xlsx" style="display: none;">
-        <label for="fileInput" class="button">选择字幕 Excel 文件</label>
-        
-        <div class="progress-container">
-            <div class="progress-bar" id="progressBar"></div>
-        </div>
-        
-        <button id="processButton" class="button" disabled>开始智能分段处理</button>
-        <div class="loader" id="loader"></div>
-        
-        <div id="result" style="display: none;">
-            <p>处理完成！点击下载结果：</p>
-            <a id="downloadLink" class="result-link" download="分段后字幕.xlsx">下载分段文件</a>
-        </div>
-        <div id="errorMessage" class="error-message"></div>
-    </div>
+<div class="container">
+    <h2 style="text-align:center">智能字幕分段工具</h2>
+    <input type="file" id="fileInput" accept=".xlsx" hidden />
+    <label for="fileInput" class="button">选择字幕 Excel 文件</label>
+    <button id="processButton" class="button" disabled>开始处理</button>
+    <div id="loader" class="loader"></div>
+    <a id="downloadLink" class="result-link" style="display:none;" download="分段字幕.xlsx">下载结果文件</a>
+    <div id="error" class="error"></div>
+</div>
 
 <script>
-// 配置参数
-const CONFIG = {
-    apiUrl: 'https://api.deepseek.com/v1/chat/completions',
-    apiKey: 'sk-3c45ea45fb0648aeac327250131ebd51', // 需替换为实际API密钥
-    batchSize: 5, // 每批处理条目数
-    maxRetries: 2 // 最大重试次数
-};
+const fileInput = document.getElementById('fileInput');
+const processButton = document.getElementById('processButton');
+const downloadLink = document.getElementById('downloadLink');
+const loader = document.getElementById('loader');
+const errorDiv = document.getElementById('error');
 
-// DOM元素
-const dom = {
-    fileInput: document.getElementById('fileInput'),
-    processButton: document.getElementById('processButton'),
-    progressBar: document.getElementById('progressBar'),
-    result: document.getElementById('result'),
-    downloadLink: document.getElementById('downloadLink'),
-    error: document.getElementById('errorMessage'),
-    loader: document.getElementById('loader')
-};
-
-// 状态管理
-let processing = false;
 let originalData = [];
 
-// 事件监听
-dom.fileInput.addEventListener('change', handleFileSelect);
-dom.processButton.addEventListener('click', startProcessing);
-
-async function handleFileSelect(e) {
+fileInput.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
     try {
-        resetUI();
-        const file = e.target.files[0];
-        if (!file) return;
-
-        dom.processButton.disabled = false;
         originalData = await parseExcel(file);
-    } catch (error) {
-        showError(`文件读取失败: ${error.message}`);
+        processButton.disabled = false;
+        errorDiv.textContent = '';
+    } catch (err) {
+        errorDiv.textContent = '文件读取失败：' + err.message;
     }
-}
+});
 
-async function startProcessing() {
-    if (processing) return;
-    processing = true;
-    
+processButton.addEventListener('click', () => {
     try {
-        resetUI();
-        showLoader();
-        dom.processButton.disabled = true;
-
-        // 准备处理数据
-        const textBlocks = prepareTextBlocks(originalData);
-        const batches = chunkArray(textBlocks, CONFIG.batchSize);
-        
-        // 分批处理
-        let allSegments = [];
-        for (const [batchIndex, batch] of batches.entries()) {
-            updateProgress((batchIndex + 1) / batches.length);
-            
-            let retryCount = 0;
-            while (retryCount <= CONFIG.maxRetries) {
-                try {
-                    const response = await processBatch(batch);
-                    const segments = parseApiResponse(response);
-                    allSegments = allSegments.concat(segments);
-                    break;
-                } catch (error) {
-                    if (retryCount === CONFIG.maxRetries) {
-                        allSegments = allSegments.concat(fallbackProcess(batch));
-                        break;
-                    }
-                    retryCount++;
-                }
-            }
-        }
-
-        // 合并时间码
-        const mergedData = mergeTimecodes(allSegments, originalData);
-        
-        // 生成文件
-        generateExcel(mergedData);
-        showResult();
-    } catch (error) {
-        showError(`处理失败: ${error.message}`);
-    } finally {
-        processing = false;
-        hideLoader();
-        dom.processButton.disabled = false;
+        const merged = mergeSubtitles(originalData);
+        const output = generateExcel(merged);
+        downloadLink.href = URL.createObjectURL(output);
+        downloadLink.style.display = 'block';
+    } catch (err) {
+        errorDiv.textContent = '处理失败：' + err.message;
     }
-}
+});
 
-// 核心处理函数
-async function processBatch(batch) {
-    const response = await fetch(CONFIG.apiUrl, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${CONFIG.apiKey}`
-        },
-        body: JSON.stringify({
-            model: "deepseek-chat",
-            messages: [{
-                role: "user",
-                content: `请按以下要求处理字幕文本：
-1. 按语义分段的完整段落
-2. 识别技术术语用<term>标记
-3. 返回JSON格式：
-{
-    "segments": [
-        {
-            "text": "完整段落",
-            "split_pos": 25,
-            "terms": ["CPU", "GPU"]
-        }
-    ]
-}
-
-待处理文本：
-${batch.map(b => b.text).join('\n')}`
-            }]
-        })
-    });
-
-    if (!response.ok) throw new Error(`API请求失败: ${response.status}`);
-    return response.json();
-}
-
-// 数据预处理
-function prepareTextBlocks(data) {
-    return data.map(item => ({
-        text: item.txt,
-        timecode: item.time,
-        translation: item.trans,
-        episode: item.episode
-    }));
-}
-
-// 时间码合并算法
-function mergeTimecodes(segments, original) {
-    let pointer = 0;
-    return segments.map(segment => {
-        const timecodes = [];
-        let textLength = 0;
-
-        while (pointer < original.length && textLength < segment.text.length) {
-            const current = original[pointer];
-            const remaining = segment.text.length - textLength;
-            const takeLength = Math.min(remaining, current.txt.length);
-
-            timecodes.push({
-                start: current.time.split('-')[0],
-                end: calculatePartialTime(current.time, takeLength / current.txt.length)
-            });
-
-            if (takeLength === current.txt.length) {
-                pointer++;
-            } else {
-                original[pointer].txt = current.txt.slice(takeLength);
-                original[pointer].time = `${calculatePartialTime(current.time, takeLength / current.txt.length)}-${current.time.split('-')[1]}`;
-            }
-            textLength += takeLength;
-        }
-
-        return {
-            episode: original[pointer]?.episode || '',
-            text: segment.text,
-            timecodes: mergeContinuousTimecodes(timecodes),
-            translation: findBestTranslation(segment.text, original),
-            terms: segment.terms
-        };
-    });
-}
-
-// 辅助函数
-function calculatePartialTime(timecode, ratio) {
-    const [start, end] = timecode.split('-');
-    const duration = timeToSeconds(end) - timeToSeconds(start);
-    return secondsToTime(timeToSeconds(start) + duration * ratio);
-}
-
-function timeToSeconds(time) {
-    const parts = time.split(':');
-    return (+parts[0] * 3600) + (+parts[1] * 60) + (+parts[2]);
-}
-
-function secondsToTime(secs) {
-    const hours = Math.floor(secs / 3600);
-    const minutes = Math.floor((secs % 3600) / 60);
-    const seconds = Math.floor(secs % 60);
-    return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
-}
-
-function pad(n) { return n < 10 ? '0' + n : n; }
-
-// UI相关函数
-function updateProgress(percentage) {
-    dom.progressBar.style.width = `${Math.floor(percentage * 100)}%`;
-}
-
-function showLoader() {
-    dom.loader.style.display = 'block';
-}
-
-function hideLoader() {
-    dom.loader.style.display = 'none';
-}
-
-function showError(msg) {
-    dom.error.textContent = msg;
-    dom.error.style.display = 'block';
-}
-
-function showResult() {
-    dom.result.style.display = 'block';
-}
-
-function resetUI() {
-    dom.error.style.display = 'none';
-    dom.result.style.display = 'none';
-    dom.progressBar.style.width = '0%';
-}
-
-// Excel处理
-async function parseExcel(file) {
-    const reader = new FileReader();
+function parseExcel(file) {
     return new Promise((resolve, reject) => {
+        const reader = new FileReader();
         reader.onload = (e) => {
             const data = new Uint8Array(e.target.result);
             const workbook = XLSX.read(data, { type: 'array' });
             const sheet = workbook.Sheets[workbook.SheetNames[0]];
             const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-            
-            const headers = jsonData[0].map(h => h.toLowerCase());
-            resolve(jsonData.slice(1).map(row => {
-                const obj = {};
-                headers.forEach((header, index) => {
-                    obj[header] = row[index] || '';
-                });
-                return obj;
+            const headers = jsonData[0];
+            const timeIndex = headers.findIndex(h => /时间/.test(h));
+            const textIndex = headers.findIndex(h => /文本/.test(h) || /字幕/.test(h));
+            if (timeIndex === -1 || textIndex === -1) {
+                reject(new Error("未找到时间轴或字幕文本列"));
+                return;
+            }
+            const result = jsonData.slice(1).map(row => ({
+                time: row[timeIndex],
+                text: row[textIndex]
             }));
+            resolve(result);
         };
         reader.onerror = reject;
         reader.readAsArrayBuffer(file);
     });
 }
 
+function mergeSubtitles(data) {
+    const result = [];
+    let bufferText = "";
+    let bufferTime = [];
+
+    function isSentenceEnd(text) {
+        return /[。！？!？]$/.test(text.trim());
+    }
+
+    for (let i = 0; i < data.length; i++) {
+        const { time, text } = data[i];
+        if (!text) continue;
+
+        bufferText += text;
+        bufferTime.push(time);
+
+        if (isSentenceEnd(text) || i === data.length - 1) {
+            result.push({
+                text: bufferText,
+                time: bufferTime.join('|')
+            });
+            bufferText = "";
+            bufferTime = [];
+        }
+    }
+
+    return result;
+}
+
 function generateExcel(data) {
+    const worksheet = XLSX.utils.json_to_sheet(data);
     const workbook = XLSX.utils.book_new();
-    const worksheet = XLSX.utils.json_to_sheet(data.map(item => ({
-        "剧集": item.episode,
-        "合并文本": item.text,
-        "时间码": item.timecodes.map(t => `${t.start}-${t.end}`).join('|'),
-        "翻译": item.translation,
-        "术语": item.terms?.join(', ') || ''
-    })));
-    
-    XLSX.utils.book_append_sheet(workbook, worksheet, "分段字幕");
-    const excelData = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
-    const blob = new Blob([excelData], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-    dom.downloadLink.href = URL.createObjectURL(blob);
+    XLSX.utils.book_append_sheet(workbook, worksheet, '合并字幕');
+    return new Blob([XLSX.write(workbook, { bookType: 'xlsx', type: 'array' })], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    });
+}
+
+// ✅ 修复点：chunkArray 定义
+function chunkArray(array, size) {
+    const chunks = [];
+    for (let i = 0; i < array.length; i += size) {
+        chunks.push(array.slice(i, i + size));
+    }
+    return chunks;
 }
 </script>
 </body>
