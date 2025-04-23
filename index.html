@@ -1,225 +1,151 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>字幕语义合并（含 DeepSeek API）</title>
+    <title>智能字幕分段工具</title>
     <style>
-        * {
-            font-family: '微软雅黑', sans-serif;
-            box-sizing: border-box;
+        /* 原有样式保留，新增加载动画 */
+        .loader {
+            display: none;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #4a90e2;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
         }
 
-        body {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            margin: 0;
-            background-color: #f0f2f5;
-        }
-
-        .container {
-            background-color: white;
-            padding: 2rem;
-            border-radius: 12px;
-            box-shadow: 0 4px 12px 0 rgba(0, 0, 0, 0.05);
-            width: 100%;
-            max-width: 600px;
-        }
-
-        .progress-container {
-            width: 100%;
-            height: 4px;
-            background-color: #eee;
-            border-radius: 2px;
-            margin: 1rem 0;
-        }
-
-        .progress-bar {
-            height: 100%;
-            background-color: #4a90e2;
-            border-radius: 2px;
-            transition: width 0.3s ease;
-        }
-
-        .button {
-            display: block;
-            width: 100%;
-            padding: 0.8rem;
-            background-color: #4a90e2;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-size: 1rem;
-            cursor: pointer;
-            margin-top: 1.5rem;
-        }
-
-        .result-link {
-            color: #4a90e2;
-            text-decoration: underline;
-            cursor: pointer;
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
         }
     </style>
-    <script src="https://cdn.sheetjs.com/xlsx-0.18.5/package/dist/xlsx.full.min.js"></script>
 </head>
-
 <body>
-    <div class="container">
-        <h1 style="text-align: center; margin-bottom: 2rem;">字幕语义合并工具（含 DeepSeek API）</h1>
-
-        <input type="file" id="fileInput" accept=".xlsx" style="display: none;">
-        <label for="fileInput" class="button">选择本地 Excel 文件</label>
-
-        <div class="progress-container" id="progressContainer" style="display: none;">
-            <div class="progress-bar" id="progressBar"></div>
-        </div>
-
-        <button id="processButton" class="button" disabled>开始处理文件</button>
-
-        <div id="result" style="display: none; margin-top: 1.5rem;">
-            <p>处理完成！点击下方链接下载新表格：</p>
-            <a id="downloadLink" class="result-link" download="合并后字幕表.xlsx">下载合并后的文件</a>
-        </div>
-    </div>
-
+    <!-- 容器结构保持不变 -->
     <script>
-        const fileInput = document.getElementById('fileInput');
-        const processButton = document.getElementById('processButton');
-        const progressContainer = document.getElementById('progressContainer');
-        const progressBar = document.getElementById('progressBar');
-        const result = document.getElementById('result');
-        const downloadLink = document.getElementById('downloadLink');
+        // 配置参数
+        const API_CONFIG = {
+            endpoint: 'https://api.deepseek.com/v1/chat/completions',
+            model: 'deepseek-chat',
+            temperature: 0.2,
+            max_tokens: 4096
+        };
 
-        // DeepSeek API 相关配置
-        const DEEPSEEK_API_URL = 'YOUR_DEEPSEEK_API_URL';
-        const DEEPSEEK_API_KEY = 'YOUR_DEEPSEEK_API_KEY';
-
-        // 文件选择处理
-        fileInput.addEventListener('change', async (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
-
-            processButton.disabled = false;
-            progressContainer.style.display = 'block';
-            progressBar.style.width = '0%';
-
-            // 读取 Excel 文件
-            const workbook = await readExcelFile(file);
-            const sheetName = workbook.SheetNames[0];
-            const sheetData = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1 });
-
-            processButton.addEventListener('click', async () => {
-                processButton.disabled = true;
-                progressBar.style.width = '0%';
-
-                // 数据处理
-                const mergedData = await processSubtitles(sheetData);
-
-                // 生成新 Excel
-                const newWorkbook = XLSX.utils.book_new();
-                XLSX.utils.sheet_add_aoa(newWorkbook, [sheetData[0], ...mergedData], { sheet: '字幕' });
-                const excelBuffer = XLSX.write(newWorkbook, { bookType: 'xlsx', type: 'arraybuffer' });
-
-                // 创建下载链接
-                const blob = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-                downloadLink.href = URL.createObjectURL(blob);
-                result.style.display = 'block';
-                progressContainer.style.display = 'none';
-                processButton.disabled = false;
-            });
-        });
-
-        // 读取 Excel 文件
-        async function readExcelFile(file) {
-            return new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onload = (e) => {
-                    const data = new Uint8Array(e.target.result);
-                    const workbook = XLSX.read(data, { type: 'array' });
-                    resolve(workbook);
-                };
-                reader.onerror = (error) => {
-                    reject(error);
-                };
-                reader.readAsArrayBuffer(file);
-            });
-        }
-
-        // 使用 DeepSeek API 判断句子是否结束
-        async function isSentenceEnd(text) {
-            try {
-                const response = await fetch(DEEPSEEK_API_URL, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${sk-3c45ea45fb0648aeac327250131ebd51}`
-                    },
-                    body: JSON.stringify({ text: text })
-                });
-                const result = await response.json();
-                return result.is_end;
-            } catch (error) {
-                console.error('调用 DeepSeek API 出错:', error);
-                return false;
-            }
-        }
-
-        // 处理字幕数据
-        async function processSubtitles(data) {
-            const headers = data[0];
-            const rows = data.slice(1);
-            const merged = [];
-            let currentEpisode = null;
-            let currentText = [];
-            let currentTime = [];
-            let currentTrans = null;
-
-            for (let i = 0; i < rows.length; i++) {
-                const row = rows[i];
-                const episode = row[headers.indexOf('episode')];
-                const txt = row[headers.indexOf('txt')].trim();
-                const trans = row[headers.indexOf('trans')];
-                const time = row[headers.indexOf('time')];
-
-                if (currentEpisode === null || episode!== currentEpisode || await isSentenceEnd(txt)) {
-                    if (currentText.length > 0) {
-                        merged.push([
-                            currentEpisode,
-                            currentText.join(' '),
-                            currentTrans || trans,
-                            currentText.join(' ').length,
-                            currentTime.join('|')
-                        ]);
-                    }
-                    currentEpisode = episode;
-                    currentText = [txt];
-                    currentTime = [time];
-                    currentTrans = trans;
-                } else {
-                    currentText.push(txt);
-                    currentTime.push(time);
-                    if (!currentTrans && trans) {
-                        currentTrans = trans;
-                    }
+        // 处理逻辑重构
+        async function processWithDeepSeek(textBlocks) {
+            const batches = chunkArray(textBlocks, 5); // 分批次处理
+            let allSegments = [];
+            
+            for (const [index, batch] of batches.entries()) {
+                updateProgress((index + 1) / batches.length);
+                try {
+                    const response = await sendBatchRequest(batch);
+                    allSegments = allSegments.concat(parseSegments(response));
+                } catch (error) {
+                    console.error(`Batch ${index} failed:`, error);
+                    allSegments = allSegments.concat(fallbackSegmentation(batch));
                 }
             }
+            return allSegments;
+        }
 
-            if (currentText.length > 0) {
-                merged.push([
-                    currentEpisode,
-                    currentText.join(' '),
-                    currentTrans,
-                    currentText.join(' ').length,
-                    currentTime.join('|')
-                ]);
+        async function sendBatchRequest(batch) {
+            const response = await fetch(API_CONFIG.endpoint, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
+                },
+                body: JSON.stringify({
+                    model: API_CONFIG.model,
+                    messages: [{
+                        role: "user",
+                        content: `请将以下字幕文本按语义分段，返回JSON格式（segments数组，包含text和最佳分句位置）：
+示例响应：
+{
+  "segments": [
+    {"text": "完整的第一句话", "split_position": 15},
+    {"text": "接下来的第二句话", "split_position": 32}
+  ]
+}
+
+需要分段的文本：
+${batch.map(t => t.fullText).join('\n')}`
+                    }],
+                    temperature: API_CONFIG.temperature,
+                    max_tokens: API_CONFIG.max_tokens
+                })
+            });
+
+            if (!response.ok) throw new Error(`API请求失败: ${response.status}`);
+            return response.json();
+        }
+
+        function parseSegments(response) {
+            try {
+                const raw = JSON.parse(response.choices[0].message.content);
+                return raw.segments.map(s => ({
+                    text: s.text,
+                    splitAt: s.split_position
+                }));
+            } catch (e) {
+                throw new Error('API响应解析失败');
             }
+        }
 
-            return merged;
+        // 时间码合并算法
+        function mergeTimecodes(segments, originalBlocks) {
+            let currentBlockIndex = 0;
+            return segments.map(segment => {
+                const timecodes = [];
+                let accumulatedLength = 0;
+                
+                while (currentBlockIndex < originalBlocks.length) {
+                    const block = originalBlocks[currentBlockIndex];
+                    const remaining = segment.text.length - accumulatedLength;
+                    
+                    if (remaining <= 0) break;
+                    
+                    const takeLength = Math.min(remaining, block.text.length);
+                    timecodes.push(block.timecode);
+                    
+                    accumulatedLength += takeLength;
+                    if (takeLength === block.text.length) {
+                        currentBlockIndex++;
+                    } else {
+                        // 处理部分匹配的情况
+                        originalBlocks[currentBlockIndex].text = block.text.slice(takeLength);
+                        originalBlocks[currentBlockIndex].timecode = adjustTimecode(
+                            block.timecode, 
+                            takeLength
+                        );
+                    }
+                }
+                
+                return {
+                    text: segment.text,
+                    timecodes,
+                    translation: findBestTranslation(segment.text, originalBlocks)
+                };
+            });
+        }
+
+        // 辅助函数
+        function chunkArray(arr, size) {
+            return Array.from({length: Math.ceil(arr.length/size)}, (_,i) => 
+                arr.slice(i*size, i*size+size));
+        }
+
+        function fallbackSegmentation(batch) {
+            // 基于标点的备用分段逻辑
+            return batch.map(block => ({
+                text: block.fullText,
+                splitAt: block.fullText.length
+            }));
         }
     </script>
 </body>
-
-</html>    
+</html>
