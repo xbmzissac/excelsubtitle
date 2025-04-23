@@ -117,8 +117,8 @@ function parseExcel(file) {
             const sheet = workbook.Sheets[workbook.SheetNames[0]];
             const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
             const headers = jsonData[0];
-            const timeIndex = headers.findIndex(h => /时间/.test(h));
-            const textIndex = headers.findIndex(h => /文本/.test(h) || /字幕/.test(h));
+            const timeIndex = headers.findIndex(h => /time/.test(h));
+            const textIndex = headers.findIndex(h => /txt/.test(h) || /字幕/.test(h));
             if (timeIndex === -1 || textIndex === -1) {
                 reject(new Error("未找到时间轴或字幕文本列"));
                 return;
